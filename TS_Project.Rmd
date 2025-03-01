@@ -1,0 +1,313 @@
+---
+title: "Time Series Project"
+author: "William Dolan"
+date: "2025-02-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(forecast)
+library(ggplot2)
+
+gold_data <- read_excel("~/Downloads/Gold_by_Quarter.xlsx")
+
+gold.USD.ts <- ts(gold_data$USD, start = c(1978, 4), end = c(2024, 4), freq = 4)
+
+autoplot(gold.USD.ts) + xlab("Quarter") + ylab("Prices per Troy Ounce")
+plot(gold.USD.ts, xlab = "Quarter", ylab = "Log Price", log = 'xy')
+
+quarterly.avg <- tapply(gold.USD.ts, cycle(gold.USD.ts), mean)
+print(quarterly.avg)
+
+gold.EURO.ts <- ts(gold_data$EUR, start = c(1978, 4), end = c(2024, 4), freq = 4)
+
+autoplot(gold.USD.ts) + xlab("Quarter") + ylab("Prices per Troy Ounce") + autolayer(gold.EURO.ts)
+```
+The log price of gold is not linear which does not indicate an exponential relationship. 
+
+
+```{r}
+SP_500 <- read_excel("~/Downloads/S&P.xlsx")
+SP_500 <- SP_500[SP_500$USE == 1,]
+SP.ts <- ts(SP_500$`Avg Price`, start = c(1979, 4), end = c(2024, 4), freq = 4)
+tail(SP.ts)
+autoplot(SP.ts) + xlab("Quarter") + ylab("Avg S&P 500 Price")
+```
+
+```{r}
+CPI <- read_excel("~/Downloads/Quarterly_CPI.xlsx")
+CPI$USE <- ifelse(CPI$QUARTER == 'S',0,CPI$USE)
+CPI <- CPI[CPI$USE == 1,]
+CPI.ts <- ts(CPI$AVG, start = c(1980, 1), end = c(2024, 4), freq = 4)
+autoplot(CPI.ts)
+```
+
+
+```{r}
+autoplot(SP.ts, series = "SP 500") + xlab("Quarter") + ylab("Avg Prices") + autolayer(gold.USD.ts, series = "Gold") + autolayer(CPI.ts, series = "CPI")
+
+correlation_SP <- cor(gold_data$USD[5:185], SP_500$`Avg Price`)
+correlation_SP
+
+correlation_CPI <- cor(gold_data$USD[6:185], CPI$AVG)
+correlation_CPI
+```
+The Quarterly price of gold is highly correlated with both the S&P 500 and Consumer Price Index showing that gold prices move in as imilair pattern as inflation and the overall market.
+
+```{r}
+Acf(gold.USD.ts, lag.max = 8, main = "")
+gold.ar1 <- Arima(diff(gold.USD.ts), order = c(1,0,0))
+summary(gold.ar1)
+Acf(diff(gold.USD.ts), lag.max = 8, main = "")
+```
+The Ar1 coefficient is more than 5 standard errors from 1 indicating it is NOT a random walk.
+
+```{r}
+stepsAhead <- 8
+
+nTrain <- length(gold.USD.ts) - stepsAhead
+
+train.ts <- window(gold.USD.ts, start = c(1978,4), end = c(1979,nTrain-1))
+
+head(train.ts)
+tail(train.ts)
+
+valid.ts <- window(gold.USD.ts, start = c(1979,nTrain), end = c(1979,nTrain+stepsAhead))
+valid.ts
+
+```
+Split the data into training and validation using the last two year as the validation data (2023 and 2024). We will sue these model to forecast the price of godl for the next two years(2025 and 2026)
+
+
+```{r}
+gold.linear<- tslm(train.ts ~ trend)
+summary(gold.linear)
+gold.linear.forecast <- forecast(gold.linear, h=8, level = 0)
+accuracy(gold.linear.forecast,valid.ts)
+```
+
+```{r}
+gold.exp <- tslm(train.ts ~ trend , lambda = 0)
+summary(gold.exp)
+gold.exp.forecast <- forecast(gold.exp, h= 8, level = 0)
+accuracy(gold.exp.forecast,valid.ts)
+```
+
+
+```{r}
+#Quadratic produced the lowest MAPE
+gold.quad <- tslm(train.ts ~ trend + I(trend^2))
+summary(gold.quad)
+gold.quad.forecast <- forecast(gold.quad, h=8, level = 0)
+accuracy(gold.quad.forecast,valid.ts)
+```
+
+```{r}
+gold.szn <- tslm(train.ts ~ season)
+summary(gold.szn)
+gold.szn.forecast <- forecast(gold.szn, h=8, level = 0)
+accuracy(gold.szn.forecast,valid.ts)
+```
+
+
+```{r}
+autoplot(train.ts) + autolayer(valid.ts, series = "Actual") + autolayer(gold.linear.forecast, series = "linear") + autolayer(gold.exp.forecast, series = "Exponential") + autolayer(gold.quad.forecast, series = "Quadratic") + autolayer(gold.szn.forecast, series = "Seasonal")
+```
+Ran all the basic models and found that the quadratic model was suprisingly accurate with a MAPE of 7.11
+Choose not to run snaive.
+Also of note the seasonality of this data is very poor and adding it to models tend to make them more inaccurate
+
+
+```{r}
+gold.linear.szn <- tslm(train.ts ~ trend + season)
+summary(gold.linear.szn)
+gold.linear.szn.forecast <- forecast(gold.linear.szn, h = 8, level = 0)
+accuracy(gold.linear.szn.forecast, valid.ts)
+
+gold.poly.szn <- tslm(train.ts ~ trend + I(trend^2)+ season)
+summary(gold.poly.szn)
+gold.poly.szn.forecast <- forecast(gold.poly.szn, h = 8, level = 0)
+accuracy(gold.poly.szn.forecast, valid.ts)
+
+autoplot(train.ts) + autolayer(valid.ts, series = "Actual") + autolayer(gold.linear.szn.forecast, series = "Linear Season") + autolayer(gold.poly.szn.forecast, series = "Polynomial Season")
+```
+The quadratic with seasonality performs well but not as well as the quadratic without seasonality which is why seasonality will not be in included.
+
+```{r}
+autoplot(train.ts) + autolayer(valid.ts, series = "Actual") + autolayer(gold.quad.forecast$fitted, series = "Fitted") + autolayer(gold.quad.forecast, series = "Forecast") 
+```
+Fitted values to show the full quadratic model.
+
+
+```{r}
+gold.arima <- auto.arima(train.ts)
+
+gold.arima.forecast <- forecast(gold.arima, h = 8)
+
+autoplot(gold.arima.forecast) + autolayer(valid.ts, series = "observed")
+accuracy(gold.arima.forecast, valid.ts)
+
+```
+AutoArima model performed very poorly with a MAPE of 17.43.
+
+```{r}
+gold.hwin <- ets(train.ts, model ="ZZZ")
+summary(gold.hwin)
+gold.hwin.forecast <- forecast(gold.hwin, h = 8)
+
+autoplot(gold.hwin.forecast) + autolayer(valid.ts, series = "Observed")
+accuracy(gold.hwin.forecast,valid.ts)
+
+```
+Holt Winters performed even worse with a MAPE of 19.07 and will not be used.
+
+
+```{r}
+set.seed(2025)
+gold.nn<- nnetar(train.ts, repeats =30, p = 12 , P = 0, size = 10)
+
+gold.nn.pred <- forecast(gold.nn, h = 8)
+
+autoplot(gold.nn.pred) + autolayer(valid.ts, series = "Observed") # + autolayer(gold.nn$fitted)
+accuracy(gold.nn.pred, valid.ts)
+```
+The neural netwoirk performs very well using the last 12 quarters (p), no seasonality(P), 10 hidden layers (size), and 30 iterations. Lowest MAPE so far.
+
+```{r}
+combined.simple <- (gold.quad.forecast$mean + gold.nn.pred$mean)/2
+
+accuracy(combined.simple,valid.ts)
+
+autoplot(train.ts) +
+  autolayer(combined.simple, series = "Simple Combined Average") +
+  autolayer(valid.ts, series = "Observed")
+```
+The simple combined average between the neural network and quadratic performed well but slightly worse than the neural network.
+
+
+```{r}
+vectors.df <- data.frame(cbind(gold.quad.forecast$mean , gold.nn.pred$mean))
+vectors.df$trimmed.average <- apply(vectors.df, 1, function(x) mean(x, trim = 0.5))
+trimmed.average <- ts(vectors.df$trimmed.average, start = c(2023, 1), end = c(2024, 4), freq = 4)
+
+accuracy(trimmed.average, valid.ts)
+
+autoplot(train.ts) +
+  autolayer(trimmed.average, series = "Trimmed Average") +
+  autolayer(valid.ts, series = "Observed")
+```
+A trimmed average performs similairly to the simple average
+
+
+```{r}
+vectors.df$valid <- valid.ts
+lm.vectors <- data.frame(vectors.df[1:4,])
+vector.lm <- lm(lm.vectors$valid ~ gold.quad.forecast.mean + gold.nn.pred.mean, data = lm.vectors)
+summary(vector.lm)
+
+fourcast <-  (-1955.0837 + vectors.df$gold.quad.forecast.mean*2.6154 + vectors.df$gold.quad.forecast.mean*-0.6873)
+regression <- ts(fourcast, start = c(2023,1), end=c(2024,4), freq=4)
+
+accuracy(fourcast, valid.ts)
+
+autoplot(train.ts) +
+  autolayer(regression, series = "Trimmed Average Regression") +
+  autolayer(valid.ts, series = "Observed")
+```
+Splitting the the validation set into two and using the first half (2023) to find the coefficients and testing against the second half og the validation data (2024). It performs worse than the other combined models.
+
+
+```{r}
+lag1 <- diff(gold.USD.ts, lag = 1)
+lag4 <- diff(gold.USD.ts, lag = 4)
+
+diff.ts <- diff(diff(gold.USD.ts, lag = 4), lag = 1)
+#print(diff.ts)
+diff.nValid <- 8
+diff.nTrain <- length(diff.ts) - diff.nValid
+diff.train.ts <- window(diff.ts, start = c(1980, 1), end = c(1980, diff.nTrain+1))
+
+diff.valid.ts <- window(diff.ts, start = c(1980, diff.nTrain + 2), end = c(1980, diff.nTrain + 1  + diff.nValid))
+smooth <- ets(diff.train.ts, model = "ZZZ")
+smooth.forecast <- forecast(smooth, h = diff.nValid, level = 0)
+
+autoplot(smooth.forecast) + autolayer(smooth.forecast$fitted, series = "Fitted") + autolayer(diff.ts, series = "Differential Actual")
+
+accuracy(smooth.forecast, diff.valid.ts)
+```
+Ran a simple exponential smoothing model which performed very poorly.
+
+
+
+```{r}
+library(prophet)
+prophet.df <- data.frame(ds = gold_data$Date[1:177], y = as.vector(gold_data$USD[1:177]))
+p_model <- prophet(prophet.df)
+valid.df <- make_future_dataframe(p_model, periods=8, freq='quarter')
+prophet.predict <- predict(p_model, valid.df)
+prophet.ts <- ts(prophet.predict$yhat, start = c(1978, 4), end = c(2024, 4), freq = 4)
+
+autoplot(train.ts) + autolayer(valid.ts) + autolayer(prophet.ts, series = "Prophet")
+
+accuracy(prophet.predict$yhat[178:185], valid.ts)
+
+```
+Tried a common model (not from class) the prohpet model that performs better than the arima and hol-winters but worse than the better models above.
+
+
+Final Forecasts
+Decided to run the top three model by lowest MAPE with the neural network being the best MAPE above and will be used as the basis for our conclusions (aka our main model).
+```{r}
+set.seed(2025)
+
+last_four <- ts(gold.USD.ts[169:185], start = c(2020,1), end = c(2024,4), freq = 4)
+
+final.quad <- tslm(gold.USD.ts ~ trend + I(trend^2))
+summary(final.quad)
+final.quad.forecast <- forecast(final.quad, h=8, level = 0)
+autoplot(gold.USD.ts) + autolayer(final.quad.forecast, series = "Quadratic Forecast") 
+autoplot(last_four) + autolayer(final.quad.forecast, series = "Quadratic Forecast")
+
+
+final.nn <- nnetar(gold.USD.ts, repeats =50, p = 12 , P = 3, size = 10)
+final.nn.pred <- forecast(final.nn, h = 8)
+autoplot(gold.USD.ts) +  autolayer(final.nn.pred, series = "Neural Network Forecast")
+autoplot(last_four) + autolayer(final.nn.pred, series = "Neural Network Forecast")
+
+
+final.vectors.df <- data.frame(cbind(final.quad.forecast$mean , final.nn.pred$mean))
+final.vectors.df$trimmed.average <- apply(final.vectors.df, 1, function(x) mean(x, trim = 0.5))
+final.trimmed.average <- ts(final.vectors.df$trimmed.average, start = c(2025, 1), end = c(2026, 4), freq = 4)
+autoplot(gold.USD.ts) +  autolayer(final.trimmed.average, series = "Trimmed Average")
+autoplot(last_four) + autolayer(final.trimmed.average, series = "Trimmed Average")
+
+
+
+autoplot(gold.USD.ts) + autolayer(final.quad.forecast, series = "Quadratic Forecast") + autolayer(final.nn.pred, series = "Neural Network Forecast") + autolayer(final.trimmed.average, series = "Trimmed Average")
+
+autoplot(last_four) + autolayer(final.quad.forecast, series = "Quadratic Forecast") + autolayer(final.nn.pred, series = "Neural Network Forecast") + autolayer(final.trimmed.average, series = "Trimmed Average")
+```
+Analysis: The trimmed average is essential just an average of quadratic and neural network. Neural network predicts gold having a decline and a quick rebound to start 2026 then a fall off. The quadratic as it is a basic model shows a slight linear rise over the next two years (least accurate by mape from testing then these two). The trimmed average has a similair predicition to nn but is less drastic in its increases and decreases. Important to note that becuase gold was peaking for the last two years which became the validation data predicitons were hard. I tried only the last year as validation data but that made the MAPEs even worse.
+
+Below is the numerical predicitons for the next two years. NEURAL NETWORK is the model we'll use as the final one:
+```{r}
+print(final.quad.forecast)
+```
+
+******* OUR PREDICITON ********************
+```{r}
+print(final.nn.pred)
+```
+****************************************
+
+
+
+
+```{r}
+print(final.trimmed.average)
+```
