@@ -1,5 +1,5 @@
 ---
-title: "Time Series Project"
+title: "Time Series Project - Gold Forecasting"
 author: "William Dolan"
 date: "2025-02-17"
 output: html_document
